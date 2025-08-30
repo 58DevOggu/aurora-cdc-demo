@@ -1,0 +1,71 @@
+{
+  "name": "aurora-mysql-connector",
+  "config": {
+    "connector.class": "io.debezium.connector.mysql.MySqlConnector",
+    "tasks.max": "1",
+    
+    "database.hostname": "${AURORA_HOSTNAME}",
+    "database.port": "3306",
+    "database.user": "cdc_user",
+    "database.password": "${CDC_PASSWORD}",
+    "database.server.id": "184054",
+    "database.server.name": "aurora-cdc",
+    
+    "database.include.list": "tpch",
+    "table.include.list": "tpch.customer,tpch.orders,tpch.lineitem,tpch.part,tpch.supplier,tpch.partsupp,tpch.nation,tpch.region,tpch.sales_.*,tpch.inventory_.*,tpch.finance_.*,tpch.logistics_.*,tpch.customer_service_.*,tpch.product_.*,tpch.marketing_.*,tpch.hr_.*,tpch.manufacturing_.*,tpch.analytics_.*",
+    
+    "database.history.kafka.bootstrap.servers": "kafka:29092",
+    "database.history.kafka.topic": "schema-changes.aurora-cdc",
+    
+    "include.schema.changes": "true",
+    "include.query": "false",
+    
+    "snapshot.mode": "initial",
+    "snapshot.locking.mode": "minimal",
+    
+    "heartbeat.interval.ms": "10000",
+    "poll.interval.ms": "1000",
+    
+    "decimal.handling.mode": "double",
+    "time.precision.mode": "adaptive",
+    "bigint.unsigned.handling.mode": "long",
+    
+    "transforms": "route,unwrap,addTimestamp",
+    "transforms.route.type": "org.apache.kafka.connect.transforms.RegexRouter",
+    "transforms.route.regex": "aurora-cdc.tpch.(.*)",
+    "transforms.route.replacement": "cdc.tpch.$1",
+    
+    "transforms.unwrap.type": "io.debezium.transforms.ExtractNewRecordState",
+    "transforms.unwrap.drop.tombstones": "false",
+    "transforms.unwrap.delete.handling.mode": "rewrite",
+    "transforms.unwrap.add.fields": "op,db,table,ts_ms,source.ts_ms",
+    
+    "transforms.addTimestamp.type": "org.apache.kafka.connect.transforms.InsertField$Value",
+    "transforms.addTimestamp.timestamp.field": "cdc_timestamp",
+    
+    "key.converter": "io.confluent.connect.avro.AvroConverter",
+    "key.converter.schema.registry.url": "http://schema-registry:8081",
+    "value.converter": "io.confluent.connect.avro.AvroConverter",
+    "value.converter.schema.registry.url": "http://schema-registry:8081",
+    
+    "topic.prefix": "aurora-cdc",
+    "topic.creation.default.replication.factor": 1,
+    "topic.creation.default.partitions": 3,
+    "topic.creation.default.cleanup.policy": "delete",
+    "topic.creation.default.retention.ms": 604800000,
+    
+    "errors.tolerance": "none",
+    "errors.log.enable": "true",
+    "errors.log.include.messages": "true",
+    
+    "provide.transaction.metadata": "true",
+    "skipped.operations": "none",
+    
+    "signal.data.collection": "tpch.debezium_signal",
+    "signal.kafka.topic": "aurora-cdc-signals",
+    
+    "max.batch.size": "10000",
+    "max.queue.size": "20000",
+    "max.queue.size.in.bytes": "134217728"
+  }
+}
