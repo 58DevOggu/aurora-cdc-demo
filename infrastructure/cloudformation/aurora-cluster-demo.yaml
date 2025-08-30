@@ -1,0 +1,333 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Aurora MySQL Cluster optimized for CDC Demo with TPC-H data'
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: demo
+    Description: Environment name
+  
+  VPCId:
+    Type: String
+    Description: VPC ID for Aurora cluster
+  
+  SubnetIds:
+    Type: CommaDelimitedList
+    Description: Subnet IDs for Aurora cluster
+  
+  TPCHScale:
+    Type: Number
+    Default: 1
+    Description: TPC-H scale factor (1 = 1GB, 10 = 10GB, etc.)
+  
+  InstanceClass:
+    Type: String
+    Default: db.r6g.xlarge
+    Description: Instance class for Aurora
+
+Resources:
+  # Secrets Manager for credentials
+  DBSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub '${EnvironmentName}-aurora-credentials'
+      Description: Aurora MySQL credentials for CDC demo
+      GenerateSecretString:
+        SecretStringTemplate: '{"username": "cdcadmin"}'
+        GenerateStringKey: 'password'
+        PasswordLength: 32
+        ExcludeCharacters: '"@/\'
+
+  # DB Subnet Group
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupName: !Sub '${EnvironmentName}-db-subnet-group'
+      DBSubnetGroupDescription: Subnet group for Aurora CDC demo
+      SubnetIds: !Ref SubnetIds
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvironmentName}-db-subnet-group'
+
+  # DB Cluster Parameter Group optimized for CDC
+  DBClusterParameterGroup:
+    Type: AWS::RDS::DBClusterParameterGroup
+    Properties:
+      Description: Aurora MySQL Cluster Parameters optimized for CDC
+      Family: aurora-mysql8.0
+      Parameters:
+        # Binary logging for CDC
+        binlog_format: ROW
+        binlog_row_image: FULL
+        binlog_checksum: CRC32
+        binlog_row_metadata: FULL
+        log_bin_trust_function_creators: 1
+        aurora_enhanced_binlog: 1
+        binlog_transaction_dependency_tracking: WRITESET
+        
+        # Performance optimizations
+        max_connections: 2000
+        innodb_buffer_pool_size: '{DBInstanceClassMemory*3/4}'
+        innodb_log_file_size: 1073741824  # 1GB
+        innodb_flush_log_at_trx_commit: 2
+        innodb_flush_method: O_DIRECT
+        
+        # CDC specific
+        slave_parallel_workers: 16
+        slave_parallel_type: LOGICAL_CLOCK
+        slave_preserve_commit_order: 1
+        
+        # Query optimization
+        query_cache_type: 0
+        query_cache_size: 0
+        tmp_table_size: 67108864  # 64MB
+        max_heap_table_size: 67108864  # 64MB
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvironmentName}-cluster-params'
+
+  # DB Instance Parameter Group
+  DBParameterGroup:
+    Type: AWS::RDS::DBParameterGroup
+    Properties:
+      Description: Aurora MySQL Instance Parameters
+      Family: aurora-mysql8.0
+      Parameters:
+        slow_query_log: 1
+        long_query_time: 2
+        log_output: FILE
+        general_log: 0
+        performance_schema: 1
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvironmentName}-instance-params'
+
+  # Aurora Cluster
+  DBCluster:
+    Type: AWS::RDS::DBCluster
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      DBClusterIdentifier: !Sub '${EnvironmentName}-aurora-cluster'
+      Engine: aurora-mysql
+      EngineVersion: 8.0.mysql_aurora.3.04.0
+      MasterUsername: !Sub '{{resolve:secretsmanager:${DBSecret}:SecretString:username}}'
+      MasterUserPassword: !Sub '{{resolve:secretsmanager:${DBSecret}:SecretString:password}}'
+      DatabaseName: tpch
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      VpcSecurityGroupIds:
+        - !ImportValue 
+          Fn::Sub: '${EnvironmentName}-vpc-aurora-sg'
+      DBClusterParameterGroupName: !Ref DBClusterParameterGroup
+      BackupRetentionPeriod: 7
+      PreferredBackupWindow: '03:00-04:00'
+      PreferredMaintenanceWindow: 'sun:04:00-sun:05:00'
+      EnableCloudwatchLogsExports:
+        - error
+        - general
+        - slowquery
+      StorageEncrypted: true
+      DeletionProtection: false  # Set to true in production
+      EnableIAMDatabaseAuthentication: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvironmentName}-aurora-cluster'
+        - Key: TPCHScale
+          Value: !Ref TPCHScale
+
+  # Primary Instance
+  DBInstancePrimary:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceIdentifier: !Sub '${EnvironmentName}-primary'
+      DBClusterIdentifier: !Ref DBCluster
+      Engine: aurora-mysql
+      DBInstanceClass: !Ref InstanceClass
+      DBParameterGroupName: !Ref DBParameterGroup
+      PubliclyAccessible: false
+      EnablePerformanceInsights: true
+      PerformanceInsightsRetentionPeriod: 7
+      MonitoringInterval: 60
+      MonitoringRoleArn: !GetAtt EnhancedMonitoringRole.Arn
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvironmentName}-primary'
+        - Key: Role
+          Value: Primary
+
+  # Read Replica for load distribution
+  DBInstanceReplica:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceIdentifier: !Sub '${EnvironmentName}-replica'
+      DBClusterIdentifier: !Ref DBCluster
+      Engine: aurora-mysql
+      DBInstanceClass: !Ref InstanceClass
+      DBParameterGroupName: !Ref DBParameterGroup
+      PubliclyAccessible: false
+      EnablePerformanceInsights: true
+      PerformanceInsightsRetentionPeriod: 7
+      MonitoringInterval: 60
+      MonitoringRoleArn: !GetAtt EnhancedMonitoringRole.Arn
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvironmentName}-replica'
+        - Key: Role
+          Value: Replica
+
+  # IAM Role for Enhanced Monitoring
+  EnhancedMonitoringRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: ''
+            Effect: Allow
+            Principal:
+              Service: monitoring.rds.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AmazonRDSEnhancedMonitoringRole'
+      Path: /
+
+  # CloudWatch Alarms
+  DBClusterCPUAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Aurora cluster CPU utilization
+      MetricName: CPUUtilization
+      Namespace: AWS/RDS
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 80
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: DBClusterIdentifier
+          Value: !Ref DBCluster
+
+  DBClusterStorageAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Aurora cluster storage space
+      MetricName: VolumeBytesUsed
+      Namespace: AWS/RDS
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 107374182400  # 100GB
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: DBClusterIdentifier
+          Value: !Ref DBCluster
+
+  # Lambda function for initial setup
+  DBSetupFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${EnvironmentName}-db-setup'
+      Runtime: python3.11
+      Handler: index.handler
+      Role: !GetAtt DBSetupRole.Arn
+      Timeout: 900
+      Environment:
+        Variables:
+          DB_SECRET_ARN: !Ref DBSecret
+          DB_ENDPOINT: !GetAtt DBCluster.Endpoint.Address
+          DB_PORT: !GetAtt DBCluster.Endpoint.Port
+          TPCH_SCALE: !Ref TPCHScale
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import pymysql
+          import os
+          
+          def handler(event, context):
+              # Get database credentials
+              secrets_client = boto3.client('secretsmanager')
+              secret = secrets_client.get_secret_value(SecretId=os.environ['DB_SECRET_ARN'])
+              credentials = json.loads(secret['SecretString'])
+              
+              # Connect to database
+              connection = pymysql.connect(
+                  host=os.environ['DB_ENDPOINT'],
+                  port=int(os.environ['DB_PORT']),
+                  user=credentials['username'],
+                  password=credentials['password'],
+                  database='tpch'
+              )
+              
+              try:
+                  with connection.cursor() as cursor:
+                      # Create CDC user
+                      cursor.execute("""
+                          CREATE USER IF NOT EXISTS 'cdc_user'@'%' 
+                          IDENTIFIED BY 'CDC_Demo_Password_2024!'
+                      """)
+                      cursor.execute("""
+                          GRANT SELECT, REPLICATION SLAVE, REPLICATION CLIENT ON *.* TO 'cdc_user'@'%'
+                      """)
+                      cursor.execute("FLUSH PRIVILEGES")
+                      
+                      # Enable binary logging checks
+                      cursor.execute("SET GLOBAL log_bin_trust_function_creators = 1")
+                      
+                  connection.commit()
+                  return {'statusCode': 200, 'body': 'Database setup completed'}
+              finally:
+                  connection.close()
+
+  DBSetupRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+      Policies:
+        - PolicyName: SecretsAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource: !Ref DBSecret
+
+Outputs:
+  ClusterEndpoint:
+    Description: Aurora Cluster Endpoint
+    Value: !GetAtt DBCluster.Endpoint.Address
+    Export:
+      Name: !Sub '${AWS::StackName}-cluster-endpoint'
+  
+  ReaderEndpoint:
+    Description: Aurora Reader Endpoint
+    Value: !GetAtt DBCluster.ReaderEndpoint.Address
+    Export:
+      Name: !Sub '${AWS::StackName}-reader-endpoint'
+  
+  Port:
+    Description: Aurora Port
+    Value: !GetAtt DBCluster.Endpoint.Port
+    Export:
+      Name: !Sub '${AWS::StackName}-port'
+  
+  SecretArn:
+    Description: Secret ARN for database credentials
+    Value: !Ref DBSecret
+    Export:
+      Name: !Sub '${AWS::StackName}-secret-arn'
+  
+  DatabaseName:
+    Description: Database name
+    Value: tpch
+    Export:
+      Name: !Sub '${AWS::StackName}-database-name'

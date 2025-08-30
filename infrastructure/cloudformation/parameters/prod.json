@@ -1,0 +1,18 @@
+[
+  {
+    "ParameterKey": "EnvironmentName",
+    "ParameterValue": "prod"
+  },
+  {
+    "ParameterKey": "DBMasterUsername",
+    "ParameterValue": "admin"
+  },
+  {
+    "ParameterKey": "DBMasterPassword",
+    "ParameterValue": "UseSecretsManager"
+  },
+  {
+    "ParameterKey": "DBInstanceClass",
+    "ParameterValue": "db.r6g.2xlarge"
+  }
+]

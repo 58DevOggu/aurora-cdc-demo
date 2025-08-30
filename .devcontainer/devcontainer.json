@@ -1,0 +1,39 @@
+{
+  "name": "Aurora CDC Demo",
+  "dockerFile": "Dockerfile",
+  "features": {
+    "ghcr.io/devcontainers/features/python:1": {
+      "version": "3.11"
+    },
+    "ghcr.io/devcontainers/features/aws-cli:1": {},
+    "ghcr.io/devcontainers/features/terraform:1": {}
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "ms-python.black-formatter",
+        "ms-python.flake8",
+        "ms-azuretools.vscode-docker",
+        "hashicorp.terraform",
+        "amazonwebservices.aws-toolkit-vscode"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "/usr/local/bin/python",
+        "python.formatting.provider": "black",
+        "python.linting.enabled": true,
+        "python.linting.pylintEnabled": true,
+        "python.linting.flake8Enabled": true
+      }
+    }
+  },
+  "postCreateCommand": "pip install -r requirements/development.txt",
+  "remoteUser": "vscode",
+  "mounts": [
+    "source=${localEnv:HOME}/.aws,target=/home/vscode/.aws,type=bind,consistency=cached"
+  ],
+  "env": {
+    "PYTHONPATH": "${containerWorkspaceFolder}/src"
+  }
+}

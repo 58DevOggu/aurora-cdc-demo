@@ -1,0 +1,186 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Aurora MySQL Cluster with CDC enabled for Databricks streaming'
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - staging
+      - prod
+    Description: Environment name
+  
+  DBMasterUsername:
+    Type: String
+    Default: admin
+    Description: Database master username
+  
+  DBMasterPassword:
+    Type: String
+    NoEcho: true
+    MinLength: 8
+    Description: Database master password
+  
+  DBInstanceClass:
+    Type: String
+    Default: db.r6g.large
+    Description: Database instance class
+  
+  VPCId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC ID for the Aurora cluster
+  
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Subnet IDs for the Aurora cluster
+
+Resources:
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupName: !Sub '${AWS::StackName}-db-subnet-group'
+      DBSubnetGroupDescription: Subnet group for Aurora cluster
+      SubnetIds: !Ref SubnetIds
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-db-subnet-group'
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  DBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub '${AWS::StackName}-db-sg'
+      GroupDescription: Security group for Aurora cluster
+      VpcId: !Ref VPCId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          CidrIp: 10.0.0.0/16
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-db-sg'
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  DBClusterParameterGroup:
+    Type: AWS::RDS::DBClusterParameterGroup
+    Properties:
+      Description: Aurora MySQL Cluster Parameter Group with CDC settings
+      Family: aurora-mysql8.0
+      Parameters:
+        binlog_format: ROW
+        binlog_row_image: FULL
+        binlog_checksum: CRC32
+        binlog_row_metadata: FULL
+        log_bin_trust_function_creators: 1
+        aurora_enhanced_binlog: 1
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-cluster-params'
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  DBParameterGroup:
+    Type: AWS::RDS::DBParameterGroup
+    Properties:
+      Description: Aurora MySQL Instance Parameter Group
+      Family: aurora-mysql8.0
+      Parameters:
+        max_connections: 1000
+        slow_query_log: 1
+        long_query_time: 2
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-instance-params'
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  DBCluster:
+    Type: AWS::RDS::DBCluster
+    Properties:
+      DBClusterIdentifier: !Sub '${AWS::StackName}-aurora-cluster'
+      Engine: aurora-mysql
+      EngineVersion: 8.0.mysql_aurora.3.04.0
+      MasterUsername: !Ref DBMasterUsername
+      MasterUserPassword: !Ref DBMasterPassword
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      VpcSecurityGroupIds:
+        - !Ref DBSecurityGroup
+      DBClusterParameterGroupName: !Ref DBClusterParameterGroup
+      BackupRetentionPeriod: 7
+      PreferredBackupWindow: '03:00-04:00'
+      PreferredMaintenanceWindow: 'sun:04:00-sun:05:00'
+      EnableCloudwatchLogsExports:
+        - error
+        - general
+        - slowquery
+        - audit
+      StorageEncrypted: true
+      BinlogFormat: ROW
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-aurora-cluster'
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  DBInstanceWriter:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceIdentifier: !Sub '${AWS::StackName}-writer'
+      DBClusterIdentifier: !Ref DBCluster
+      Engine: aurora-mysql
+      DBInstanceClass: !Ref DBInstanceClass
+      DBParameterGroupName: !Ref DBParameterGroup
+      PubliclyAccessible: false
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-writer'
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Role
+          Value: Writer
+
+  DBInstanceReader:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceIdentifier: !Sub '${AWS::StackName}-reader'
+      DBClusterIdentifier: !Ref DBCluster
+      Engine: aurora-mysql
+      DBInstanceClass: !Ref DBInstanceClass
+      DBParameterGroupName: !Ref DBParameterGroup
+      PubliclyAccessible: false
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-reader'
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Role
+          Value: Reader
+
+Outputs:
+  ClusterEndpoint:
+    Description: Aurora Cluster Endpoint
+    Value: !GetAtt DBCluster.Endpoint.Address
+    Export:
+      Name: !Sub '${AWS::StackName}-cluster-endpoint'
+  
+  ReaderEndpoint:
+    Description: Aurora Reader Endpoint
+    Value: !GetAtt DBCluster.ReaderEndpoint.Address
+    Export:
+      Name: !Sub '${AWS::StackName}-reader-endpoint'
+  
+  Port:
+    Description: Aurora Port
+    Value: !GetAtt DBCluster.Endpoint.Port
+    Export:
+      Name: !Sub '${AWS::StackName}-port'
+  
+  SecurityGroup:
+    Description: Security Group ID
+    Value: !Ref DBSecurityGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-security-group'

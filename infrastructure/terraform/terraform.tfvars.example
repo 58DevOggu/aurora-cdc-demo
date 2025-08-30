@@ -1,0 +1,14 @@
+aws_region       = "us-east-1"
+environment_name = "dev"
+vpc_cidr        = "10.0.0.0/16"
+
+availability_zones = [
+  "us-east-1a",
+  "us-east-1b"
+]
+
+db_master_username      = "admin"
+db_master_password      = "ChangeMe123!"
+db_instance_class       = "db.r6g.large"
+backup_retention_period = 7
+alarm_email            = "your-email@example.com"
